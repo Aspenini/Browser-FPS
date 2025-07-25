@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Doom-Style Raycaster Game</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: black;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            touch-action: none; /* Prevent default touch behaviors */
+        }
+        #game {
+            width: 100%;
+            height: 70%; /* Top part for game screen */
+            background: black;
+            image-rendering: pixelated; /* For retro look */
+        }
+        #controls {
+            position: relative;
+            width: 100%;
+            height: 30%; /* Bottom part for controls */
+            background: #333; /* Dark gray like the image */
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            box-sizing: border-box;
+            user-select: none;
+        }
+        .button {
+            background: #555;
+            color: white;
+            border: 1px solid #777;
+            border-radius: 5px;
+            padding: 10px;
+            font-size: 16px;
+            touch-action: manipulation;
+            opacity: 0.8;
+        }
+        .dpad {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .dpad-row {
+            display: flex;
+        }
+        .face-buttons {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            grid-gap: 10px;
+        }
+        .analog {
+            width: 60px;
+            height: 60px;
+            background: #444;
+            border-radius: 50%;
+            position: relative;
+        }
+        .analog-stick {
+            width: 30px;
+            height: 30px;
+            background: #666;
+            border-radius: 50%;
+            position: absolute;
+            top: 15px;
+            left: 15px;
+        }
+        #left-controls, #right-controls {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #shoulder-buttons {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            display: flex;
+            justify-content: space-between;
+            padding: 5px;
+        }
+        .shoulder {
+            background: #444;
+            padding: 5px 10px;
+            border-radius: 3px;
+        }
+        /* Colors for face buttons like PS style */
+        #up-btn { background: #00ff00; } /* Green triangle */
+        #right-btn { background: #ff0000; } /* Red circle */
+        #down-btn { background: #0000ff; } /* Blue X */
+        #left-btn { background: #ff00ff; } /* Pink square */
+        /* Hide text, use shapes if needed, but simple for now */
+    </style>
+</head>
+<body>
+    <canvas id="game"></canvas>
+    <div id="controls">
+        <div id="shoulder-buttons">
+            <div>
+                <button class="shoulder button" id="L1">L1</button>
+                <button class="shoulder button" id="L2">L2</button>
+            </div>
+            <div>
+                <button class="shoulder button" id="R2">R2</button>
+                <button class="shoulder button" id="R1">R1</button>
+            </div>
+        </div>
+        <div id="left-controls">
+            <!-- D-Pad -->
+            <div class="dpad">
+                <div class="dpad-row">
+                    <button class="button" id="dpad-up">↑</button>
+                </div>
+                <div class="dpad-row">
+                    <button class="button" id="dpad-left">←</button>
+                    <button class="button" id="dpad-down">↓</button>
+                    <button class="button" id="dpad-right">→</button>
+                </div>
+            </div>
+            <!-- Left Analog (simplified as touch area) -->
+            <div class="analog" id="left-analog">
+                <div class="analog-stick"></div>
+            </div>
+        </div>
+        <div id="right-controls">
+            <!-- Face Buttons -->
+            <div class="face-buttons">
+                <div></div>
+                <button class="button" id="up-btn">△</button>
+                <div></div>
+                <button class="button" id="left-btn">□</button>
+                <div></div>
+                <button class="button" id="right-btn">○</button>
+                <div></div>
+                <button class="button" id="down-btn">×</button>
+                <div></div>
+            </div>
+            <!-- Right Analog -->
+            <div class="analog" id="right-analog">
+                <div class="analog-stick"></div>
+            </div>
+        </div>
+        <!-- Bottom elements like speakers, logo, play -->
+        <div style="position: absolute; bottom: 10px; left: 0; right: 0; text-align: center;">
+            <span style="font-size: 24px; color: red;">G</span>
+            <button class="button" id="play-btn">▶</button>
+        </div>
+    </div>
+
+    <script>
+        // Raycaster Game Logic
+        const canvas = document.getElementById('game');
+        const ctx = canvas.getContext('2d');
+        let w = canvas.width = window.innerWidth;
+        let h = canvas.height = window.innerHeight * 0.7; // 70% height
+
+        // Adjust for resize
+        window.addEventListener('resize', () => {
+            w = canvas.width = window.innerWidth;
+            h = canvas.height = window.innerHeight * 0.7;
+        });
+
+        // Simple map (1 = wall, 2 = different wall)
+        const map = [
+            [1,1,1,1,1,1,1],
+            [1,0,0,0,0,0,1],
+            [1,0,1,0,1,0,1],
+            [1,0,0,0,0,0,1],
+            [1,0,1,0,1,0,1],
+            [1,0,0,0,0,0,1],
+            [1,1,1,1,1,1,1]
+        ];
+        const mapWidth = map[0].length;
+        const mapHeight = map.length;
+
+        // Player
+        let posX = 2, posY = 2; // Position
+        let dirX = -1, dirY = 0; // Direction
+        let planeX = 0, planeY = 0.66; // Camera plane (FOV)
+
+        // Movement speeds (optimized for mobile, smaller steps)
+        const moveSpeed = 0.05;
+        const rotSpeed = 0.03;
+
+        // Input states
+        let moveForward = false, moveBackward = false;
+        let strafeLeft = false, strafeRight = false;
+        let turnLeft = false, turnRight = false;
+
+        // Touch controls mapping
+        // D-Pad: up=forward, down=back, left=strafe left, right=strafe right
+        // Face: triangle=forward, X=back, square=turn left, circle=turn right
+        // Analogs: left for move, right for turn (simplified touch drag)
+
+        function addTouchListeners() {
+            // Button presses
+            const buttons = {
+                'dpad-up': () => moveForward = true,
+                'dpad-down': () => moveBackward = true,
+                'dpad-left': () => strafeLeft = true,
+                'dpad-right': () => strafeRight = true,
+                'up-btn': () => moveForward = true, // Triangle
+                'down-btn': () => moveBackward = true, // X
+                'left-btn': () => turnLeft = true, // Square
+                'right-btn': () => turnRight = true, // Circle
+            };
+            for (let id in buttons) {
+                const btn = document.getElementById(id);
+                btn.addEventListener('touchstart', (e) => { e.preventDefault(); buttons[id](); });
+                btn.addEventListener('touchend', (e) => { e.preventDefault(); resetMoves(); });
+            }
+
+            // Reset all moves on touchend anywhere in controls
+            document.getElementById('controls').addEventListener('touchend', resetMoves);
+
+            function resetMoves() {
+                moveForward = moveBackward = strafeLeft = strafeRight = turnLeft = turnRight = false;
+            }
+
+            // Simple analog (touch move for direction)
+            // Left analog: move
+            const leftAnalog = document.getElementById('left-analog');
+            leftAnalog.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                const touch = e.touches[0];
+                const rect = leftAnalog.getBoundingClientRect();
+                const dx = (touch.clientX - rect.left - rect.width / 2) / (rect.width / 2);
+                const dy = (touch.clientY - rect.top - rect.height / 2) / (rect.height / 2);
+                if (Math.abs(dx) > Math.abs(dy)) {
+                    strafeLeft = dx < 0;
+                    strafeRight = dx > 0;
+                } else {
+                    moveForward = dy < 0;
+                    moveBackward = dy > 0;
+                }
+            });
+
+            // Right analog: turn
+            const rightAnalog = document.getElementById('right-analog');
+            rightAnalog.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                const touch = e.touches[0];
+                const rect = rightAnalog.getBoundingClientRect();
+                const dx = (touch.clientX - rect.left - rect.width / 2) / (rect.width / 2);
+                turnLeft = dx < 0;
+                turnRight = dx > 0;
+            });
+        }
+
+        addTouchListeners();
+
+        // Game loop
+        function draw() {
+            ctx.clearRect(0, 0, w, h);
+
+            // Raycasting
+            for (let x = 0; x < w; x++) {
+                const cameraX = 2 * x / w - 1;
+                const rayDirX = dirX + planeX * cameraX;
+                const rayDirY = dirY + planeY * cameraX;
+
+                let mapX = Math.floor(posX);
+                let mapY = Math.floor(posY);
+
+                const sideDistX = Math.abs(1 / rayDirX);
+                const sideDistY = Math.abs(1 / rayDirY);
+
+                const deltaDistX = Math.abs(1 / rayDirX);
+                const deltaDistY = Math.abs(1 / rayDirY);
+
+                let perpWallDist;
+
+                let stepX = rayDirX < 0 ? -1 : 1;
+                let stepY = rayDirY < 0 ? -1 : 1;
+
+                let sideDistXX = rayDirX < 0 ? (posX - mapX) * deltaDistX : (mapX + 1 - posX) * deltaDistX;
+                let sideDistYY = rayDirY < 0 ? (posY - mapY) * deltaDistY : (mapY + 1 - posY) * deltaDistY;
+
+                let hit = false;
+                let side;
+
+                while (!hit) {
+                    if (sideDistXX < sideDistYY) {
+                        sideDistXX += deltaDistX;
+                        mapX += stepX;
+                        side = 0;
+                    } else {
+                        sideDistYY += deltaDistY;
+                        mapY += stepY;
+                        side = 1;
+                    }
+                    if (map[mapY][mapX] > 0) hit = true;
+                }
+
+                perpWallDist = side == 0 ? (sideDistXX - deltaDistX) : (sideDistYY - deltaDistY);
+
+                const lineHeight = Math.floor(h / perpWallDist);
+
+                let drawStart = -lineHeight / 2 + h / 2;
+                if (drawStart < 0) drawStart = 0;
+                let drawEnd = lineHeight / 2 + h / 2;
+                if (drawEnd >= h) drawEnd = h - 1;
+
+                // Colors: darker for side walls
+                let color = map[mapY][mapX] === 1 ? (side === 1 ? '#666' : '#999') : (side === 1 ? '#333' : '#666');
+
+                ctx.beginPath();
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 1; // One pixel per column
+                ctx.moveTo(x, drawStart);
+                ctx.lineTo(x, drawEnd);
+                ctx.stroke();
+            }
+
+            // Movement
+            if (moveForward) {
+                if (map[Math.floor(posY)][Math.floor(posX + dirX * moveSpeed)] === 0) posX += dirX * moveSpeed;
+                if (map[Math.floor(posY + dirY * moveSpeed)][Math.floor(posX)] === 0) posY += dirY * moveSpeed;
+            }
+            if (moveBackward) {
+                if (map[Math.floor(posY)][Math.floor(posX - dirX * moveSpeed)] === 0) posX -= dirX * moveSpeed;
+                if (map[Math.floor(posY - dirY * moveSpeed)][Math.floor(posX)] === 0) posY -= dirY * moveSpeed;
+            }
+            if (strafeLeft) {
+                if (map[Math.floor(posY)][Math.floor(posX - dirY * moveSpeed)] === 0) posX -= dirY * moveSpeed;
+                if (map[Math.floor(posY + dirX * moveSpeed)][Math.floor(posX)] === 0) posY += dirX * moveSpeed;
+            }
+            if (strafeRight) {
+                if (map[Math.floor(posY)][Math.floor(posX + dirY * moveSpeed)] === 0) posX += dirY * moveSpeed;
+                if (map[Math.floor(posY - dirX * moveSpeed)][Math.floor(posX)] === 0) posY -= dirX * moveSpeed;
+            }
+            if (turnLeft) {
+                const oldDirX = dirX;
+                dirX = dirX * Math.cos(rotSpeed) - dirY * Math.sin(rotSpeed);
+                dirY = oldDirX * Math.sin(rotSpeed) + dirY * Math.cos(rotSpeed);
+                const oldPlaneX = planeX;
+                planeX = planeX * Math.cos(rotSpeed) - planeY * Math.sin(rotSpeed);
+                planeY = oldPlaneX * Math.sin(rotSpeed) + planeY * Math.cos(rotSpeed);
+            }
+            if (turnRight) {
+                const oldDirX = dirX;
+                dirX = dirX * Math.cos(-rotSpeed) - dirY * Math.sin(-rotSpeed);
+                dirY = oldDirX * Math.sin(-rotSpeed) + dirY * Math.cos(-rotSpeed);
+                const oldPlaneX = planeX;
+                planeX = planeX * Math.cos(-rotSpeed) - planeY * Math.sin(-rotSpeed);
+                planeY = oldPlaneX * Math.sin(-rotSpeed) + planeY * Math.cos(-rotSpeed);
+            }
+
+            requestAnimationFrame(draw);
+        }
+
+        draw();
+    </script>
+</body>
+</html>
